@@ -1,0 +1,44 @@
+appId: com.erp.system
+productName: ERP System
+directories:
+  buildResources: resources
+  output: dist
+
+asar: true
+
+files:
+  - "**/*"
+  - "!node_modules/.cache"
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: icon.ico
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: icon.ico
+  uninstallerIcon: icon.ico
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  icon: icon.icns
+  category: public.app-category.business
+
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  icon: icon.png
+  category: Office
