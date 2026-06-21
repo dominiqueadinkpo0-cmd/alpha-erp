@@ -9,6 +9,15 @@ const auth = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Check for organization_id (multi-tenant migration)
+    if (!decoded.organization_id) {
+      return res.status(401).json({ 
+        error: 'Token expired. Please login again.',
+        code: 'TOKEN_RENEWAL_REQUIRED'
+      });
+    }
+    
     req.user = decoded;
     next();
   } catch (error) {

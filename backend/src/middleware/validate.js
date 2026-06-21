@@ -62,11 +62,21 @@ const projectSchema = [
   body('priority').optional().isIn(['low', 'medium', 'high', 'urgent']).withMessage('Invalid priority')
 ];
 
+const organizationSchema = [
+  body('organization_name').trim().notEmpty().withMessage('Organization name is required'),
+  body('slug').trim().matches(/^[a-z0-9-]+$/).withMessage('Slug must contain only lowercase letters, numbers, and hyphens'),
+  body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
+  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+  body('first_name').trim().notEmpty().withMessage('First name is required'),
+  body('last_name').trim().notEmpty().withMessage('Last name is required')
+];
+
 module.exports = {
   validate,
   validateRequest,
   loginSchema,
   registerSchema,
+  organizationSchema,
   productSchema,
   contactSchema,
   invoiceSchema,

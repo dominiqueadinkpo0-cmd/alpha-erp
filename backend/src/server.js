@@ -31,6 +31,8 @@ const auditLog = require('./middleware/audit');
 const auditRoutes = require('./routes/audit');
 const backupRoutes = require('./routes/backup');
 const { createBackup } = require('./services/backup');
+const { auth } = require('./middleware/auth');
+const { tenantIsolation } = require('./middleware/tenantIsolation');
 
 const app = express();
 const server = http.createServer(app);
@@ -43,24 +45,35 @@ app.use(express.json());
 app.use(sanitizeInput);
 app.use(requestLogger);
 
+// Auth routes (no tenant isolation needed)
 app.use('/api/auth', authLimiter, authRoutes);
-app.use('/api/products', generalLimiter, productRoutes);
-app.use('/api/contacts', generalLimiter, contactRoutes);
-app.use('/api/projects', generalLimiter, projectRoutes);
-app.use('/api/invoices', generalLimiter, invoiceRoutes);
-app.use('/api/dashboard', generalLimiter, dashboardRoutes);
-app.use('/api/employees', generalLimiter, employeeRoutes);
-app.use('/api/reports', generalLimiter, reportRoutes);
-app.use('/api/integrations', generalLimiter, integrationRoutes);
-app.use('/api/integrations/slack', generalLimiter, slackIntegrationRoutes);
-app.use('/api/integrations/teams', generalLimiter, teamsIntegrationRoutes);
-app.use('/api/notifications', generalLimiter, notificationRoutes);
-app.use('/api/subscription', generalLimiter, subscriptionRoutes);
-app.use('/api/chatbot', generalLimiter, chatbotRoutes);
-app.use('/api/trial', generalLimiter, trialRoutes);
 
-app.use('/api/audit', auditRoutes);
-app.use('/api/backup', backupRoutes);
+// Business routes with tenant isolation
+// Tenant isolation runs AFTER auth, BEFORE route handler
+const businessRoutes = [
+  { path: '/api/products', router: productRoutes },
+  { path: '/api/contacts', router: contactRoutes },
+  { path: '/api/projects', router: projectRoutes },
+  { path: '/api/invoices', router: invoiceRoutes },
+  { path: '/api/dashboard', router: dashboardRoutes },
+  { path: '/api/employees', router: employeeRoutes },
+  { path: '/api/reports', router: reportRoutes },
+  { path: '/api/integrations', router: integrationRoutes },
+  { path: '/api/integrations/slack', router: slackIntegrationRoutes },
+  { path: '/api/integrations/teams', router: teamsIntegrationRoutes },
+  { path: '/api/notifications', router: notificationRoutes },
+  { path: '/api/subscription', router: subscriptionRoutes },
+  { path: '/api/chatbot', router: chatbotRoutes },
+  { path: '/api/audit', router: auditRoutes },
+  { path: '/api/backup', router: backupRoutes },
+];
+
+businessRoutes.forEach(({ path, router }) => {
+  app.use(path, generalLimiter, auth, tenantIsolation, router);
+});
+
+// Trial routes (no tenant isolation - global anti-abuse)
+app.use('/api/trial', generalLimiter, trialRoutes);
 
 const apiPathsToAudit = [
   '/api/products', '/api/contacts', '/api/projects', '/api/invoices',

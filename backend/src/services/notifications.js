@@ -64,11 +64,17 @@ async function sendWhatsApp(to, message) {
   }
 }
 
-async function sendSlackNotification(channel, message) {
+async function sendSlackNotification(channel, message, organizationId = null) {
   try {
-    const integrations = await pool.query(
-      'SELECT * FROM slack_integrations WHERE is_active = true'
-    );
+    let query = 'SELECT * FROM slack_integrations WHERE is_active = true';
+    const params = [];
+    
+    if (organizationId) {
+      query += ' AND organization_id = $1';
+      params.push(organizationId);
+    }
+    
+    const integrations = await pool.query(query, params);
 
     for (const integration of integrations.rows) {
       const targetChannel = channel || integration.channel_id;
@@ -94,58 +100,39 @@ async function sendSlackNotification(channel, message) {
   }
 }
 
-async function sendTeamsNotification(teamId, channelId, message) {
+async function sendTeamsNotification(teamId, channelId, message, organizationId = null) {
   try {
-    const integrations = await pool.query(
-      'SELECT * FROM teams_integrations WHERE is_active = true'
-    );
+    let query = 'SELECT * FROM teams_integrations WHERE is_active = true';
+    const params = [];
+    
+    if (organizationId) {
+      query += ' AND organization_id = $1';
+      params.push(organizationId);
+    }
+    
+    const integrations = await pool.query(query, params);
 
     for (const integration of integrations.rows) {
-      let accessToken = integration.access_token;
-
-      if (integration.refresh_token) {
-        try {
-          const refreshRes = await axios.post(
-            `https://login.microsoftonline.com/${integration.tenant_id || 'common'}/oauth2/v2.0/token`,
-            new URLSearchParams({
-              client_id: process.env.TEAMS_CLIENT_ID,
-              client_secret: process.env.TEAMS_CLIENT_SECRET,
-              refresh_token: integration.refresh_token,
-              grant_type: 'refresh_token',
-              scope: 'ChannelMessage.Send Team.ReadBasic.All Channel.ReadBasic.All User.Read'
-            }),
-            { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-          );
-
-          if (refreshRes.data.access_token) {
-            accessToken = refreshRes.data.access_token;
-            await pool.query(
-              'UPDATE teams_integrations SET access_token = $1, updated_at = CURRENT_TIMESTAMP WHERE user_id = $2',
-              [accessToken, integration.user_id]
-            );
-            if (refreshRes.data.refresh_token) {
-              await pool.query(
-                'UPDATE teams_integrations SET refresh_token = $1 WHERE user_id = $2',
-                [refreshRes.data.refresh_token, integration.user_id]
-              );
+      if (integration.access_token) {
+        const targetTeamId = teamId || integration.team_id;
+        const targetChannelId = channelId || integration.channel_id;
+        
+        await axios.post(
+          `https://graph.microsoft.com/v1.0/teams/${targetTeamId}/channels/${targetChannelId}/messages`,
+          {
+            body: {
+              content: message,
+              contentType: 'text'
+            }
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${integration.access_token}`,
+              'Content-Type': 'application/json'
             }
           }
-        } catch (e) {}
+        );
       }
-
-      const targetTeamId = teamId || integration.team_id;
-      const targetChannelId = channelId || integration.channel_id;
-
-      await axios.post(
-        `https://graph.microsoft.com/v1.0/teams/${targetTeamId}/channels/${targetChannelId}/messages`,
-        {
-          body: {
-            contentType: 'text',
-            content: message
-          }
-        },
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
     }
     return true;
   } catch (error) {
@@ -156,67 +143,24 @@ async function sendTeamsNotification(teamId, channelId, message) {
 
 function generateDailyReportHTML(stats) {
   return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <style>
-        body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }
-        .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }
-        .content { padding: 30px; }
-        .stat-card { background: #f8f9fa; border-radius: 8px; padding: 15px; margin-bottom: 15px; }
-        .stat-label { color: #6c757d; font-size: 14px; }
-        .stat-value { font-size: 24px; font-weight: bold; color: #333; }
-        .stat-value.positive { color: #28a745; }
-        .stat-value.negative { color: #dc3545; }
-        .footer { background: #f8f9fa; padding: 20px; text-align: center; color: #6c757d; font-size: 12px; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <h1>📊 Rapport Quotidien ERP</h1>
-          <p>${new Date().toLocaleDateString('fr-FR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
-        </div>
-        <div class="content">
-          <div class="stat-card">
-            <div class="stat-label">💰 Revenus du jour</div>
-            <div class="stat-value positive">€${stats.daily_revenue.toLocaleString()}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">📦 Commandes</div>
-            <div class="stat-value">${stats.orders_count}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">🛒 Nouveaux clients</div>
-            <div class="stat-value">${stats.new_contacts}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">⚠️ Alertes stock</div>
-            <div class="stat-value ${stats.low_stock_count > 0 ? 'negative' : ''}">${stats.low_stock_count} produits</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">📋 Projets actifs</div>
-            <div class="stat-value">${stats.active_projects}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">👥 Employés présents</div>
-            <div class="stat-value">${stats.active_employees}</div>
-          </div>
-        </div>
-        <div class="footer">
-          <p>ERP System - Rapport automatique</p>
-        </div>
-      </div>
-    </body>
-    </html>
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #9A7432;">📊 Rapport Quotidien ERP</h2>
+      <table style="width: 100%; border-collapse: collapse;">
+        <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>💰 Revenus</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">€${stats.daily_revenue.toLocaleString()}</td></tr>
+        <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>📦 Commandes</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${stats.orders_count}</td></tr>
+        <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>🛒 Nouveaux clients</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${stats.new_contacts}</td></tr>
+        <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>⚠️ Alertes stock</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${stats.low_stock_count} produits</td></tr>
+        <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>📋 Projets actifs</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${stats.active_projects}</td></tr>
+        <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>👥 Employés</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${stats.active_employees}</td></tr>
+      </table>
+      <p style="color: #666; font-size: 12px;">ERP System - Alpha Omega Digital</p>
+    </div>
   `;
 }
 
 function generateDailyReportText(stats) {
   return `
-📊 RAPPORT QUOTIDIEN ERP
-📅 ${new Date().toLocaleDateString('fr-FR')}
+📊 Rapport Quotidien ERP
 
 💰 Revenus: €${stats.daily_revenue.toLocaleString()}
 📦 Commandes: ${stats.orders_count}
@@ -230,40 +174,40 @@ ERP System
   `.trim();
 }
 
-async function getDailyStats() {
+async function getDailyStats(organizationId) {
   const today = new Date().toISOString().split('T')[0];
 
   const [revenue, orders, contacts, stock, projects, employees] = await Promise.all([
     pool.query(`
       SELECT COALESCE(SUM(total), 0) as total
       FROM invoices 
-      WHERE type = 'invoice' AND DATE(issue_date) = $1
-    `, [today]),
+      WHERE type = 'invoice' AND DATE(issue_date) = $1 AND organization_id = $2
+    `, [today, organizationId]),
     pool.query(`
       SELECT COUNT(*) as count
       FROM invoices 
-      WHERE DATE(created_at) = $1
-    `, [today]),
+      WHERE DATE(created_at) = $1 AND organization_id = $2
+    `, [today, organizationId]),
     pool.query(`
       SELECT COUNT(*) as count
       FROM contacts 
-      WHERE DATE(created_at) = $1
-    `, [today]),
+      WHERE DATE(created_at) = $1 AND organization_id = $2
+    `, [today, organizationId]),
     pool.query(`
       SELECT COUNT(*) as count
       FROM products 
-      WHERE is_active = true AND quantity <= min_quantity
-    `),
+      WHERE is_active = true AND quantity <= min_quantity AND organization_id = $1
+    `, [organizationId]),
     pool.query(`
       SELECT COUNT(*) as count
       FROM projects 
-      WHERE status IN ('active', 'planning')
-    `),
+      WHERE status IN ('active', 'planning') AND organization_id = $1
+    `, [organizationId]),
     pool.query(`
       SELECT COUNT(*) as count
       FROM employees 
-      WHERE status = 'active'
-    `)
+      WHERE status = 'active' AND organization_id = $1
+    `, [organizationId])
   ]);
 
   return {
@@ -278,37 +222,45 @@ async function getDailyStats() {
 
 async function sendDailyNotifications() {
   try {
-    const users = await pool.query(`
-      SELECT u.*, n.email_enabled, n.whatsapp_enabled, n.whatsapp_number
-      FROM users u
-      LEFT JOIN notification_settings n ON u.id = n.user_id
-      WHERE u.is_active = true AND (n.email_enabled = true OR n.whatsapp_enabled = true)
-    `);
+    // Get all active organizations
+    const organizations = await pool.query(
+      'SELECT id, name FROM organizations WHERE is_active = true'
+    );
 
-    const stats = await getDailyStats();
+    for (const org of organizations.rows) {
+      const users = await pool.query(`
+        SELECT u.*, n.email_enabled, n.whatsapp_enabled, n.whatsapp_number
+        FROM users u
+        LEFT JOIN notification_settings n ON u.id = n.user_id
+        WHERE u.is_active = true AND u.organization_id = $1 
+        AND (n.email_enabled = true OR n.whatsapp_enabled = true)
+      `, [org.id]);
 
-    for (const user of users.rows) {
-      if (user.email_enabled && user.email) {
-        const html = generateDailyReportHTML(stats);
-        await sendEmail(user.email, '📊 Rapport Quotidien ERP', html);
+      const stats = await getDailyStats(org.id);
+
+      for (const user of users.rows) {
+        if (user.email_enabled && user.email) {
+          const html = generateDailyReportHTML(stats);
+          await sendEmail(user.email, '📊 Rapport Quotidien ERP', html);
+        }
+
+        if (user.whatsapp_enabled && user.whatsapp_number) {
+          const text = generateDailyReportText(stats);
+          await sendWhatsApp(user.whatsapp_number, text);
+        }
+
+        await pool.query(`
+          INSERT INTO notifications (user_id, type, title, message, data, organization_id)
+          VALUES ($1, 'daily_report', 'Rapport Quotidien', $2, $3, $4)
+        `, [user.id, `Rapport du ${new Date().toLocaleDateString('fr-FR')}`, JSON.stringify(stats), org.id]);
       }
 
-      if (user.whatsapp_enabled && user.whatsapp_number) {
-        const text = generateDailyReportText(stats);
-        await sendWhatsApp(user.whatsapp_number, text);
-      }
+      const slackReportText = generateDailyReportText(stats);
+      await sendSlackNotification(null, slackReportText, org.id);
+      await sendTeamsNotification(null, null, slackReportText, org.id);
 
-      await pool.query(`
-        INSERT INTO notifications (user_id, type, title, message, data)
-        VALUES ($1, 'daily_report', 'Rapport Quotidien', $2, $3)
-      `, [user.id, `Rapport du ${new Date().toLocaleDateString('fr-FR')}`, JSON.stringify(stats)]);
+      console.log(`Daily notifications sent for organization ${org.name}: ${users.rows.length} users`);
     }
-
-    const slackReportText = generateDailyReportText(stats);
-    await sendSlackNotification(null, slackReportText);
-    await sendTeamsNotification(null, null, slackReportText);
-
-    console.log('Daily notifications sent to', users.rows.length, 'users');
   } catch (error) {
     console.error('Daily notification error:', error);
   }
@@ -316,22 +268,30 @@ async function sendDailyNotifications() {
 
 async function checkLowStock() {
   try {
-    const products = await pool.query(`
-      SELECT p.*, u.email, u.id as user_id
-      FROM products p
-      CROSS JOIN users u
-      WHERE p.is_active = true AND p.quantity <= p.min_quantity AND u.is_active = true
-    `);
+    // Get all active organizations
+    const organizations = await pool.query(
+      'SELECT id FROM organizations WHERE is_active = true'
+    );
 
-    for (const product of products.rows) {
-      const message = `⚠️ Stock bas: ${product.name}\nQuantité: ${product.quantity}\nMinimum: ${product.min_quantity}`;
-      
-      await sendEmail(product.email, `⚠️ Alerte Stock: ${product.name}`, `<p>${message.replace(/\n/g, '<br>')}</p>`);
-      
-      await pool.query(`
-        INSERT INTO notifications (user_id, type, title, message, data)
-        VALUES ($1, 'low_stock', 'Alerte Stock', $2, $3)
-      `, [product.user_id, message, JSON.stringify({ product_id: product.id })]);
+    for (const org of organizations.rows) {
+      const products = await pool.query(`
+        SELECT p.*, u.email, u.id as user_id
+        FROM products p
+        CROSS JOIN users u
+        WHERE p.is_active = true AND p.quantity <= p.min_quantity 
+        AND u.is_active = true AND p.organization_id = $1 AND u.organization_id = $1
+      `, [org.id]);
+
+      for (const product of products.rows) {
+        const message = `⚠️ Stock bas: ${product.name}\nQuantité: ${product.quantity}\nMinimum: ${product.min_quantity}`;
+        
+        await sendEmail(product.email, `⚠️ Alerte Stock: ${product.name}`, `<p>${message.replace(/\n/g, '<br>')}</p>`);
+        
+        await pool.query(`
+          INSERT INTO notifications (user_id, type, title, message, data, organization_id)
+          VALUES ($1, 'low_stock', 'Alerte Stock', $2, $3, $4)
+        `, [product.user_id, message, JSON.stringify({ product_id: product.id }), org.id]);
+      }
     }
   } catch (error) {
     console.error('Low stock check error:', error);
@@ -342,23 +302,30 @@ async function checkOverdueInvoices() {
   try {
     const today = new Date().toISOString().split('T')[0];
     
-    const invoices = await pool.query(`
-      SELECT i.*, c.first_name || ' ' || c.last_name as contact_name, u.email, u.id as user_id
-      FROM invoices i
-      JOIN contacts c ON i.contact_id = c.id
-      JOIN users u ON i.user_id = u.id
-      WHERE i.status = 'pending' AND i.due_date < $1
-    `, [today]);
+    // Get all active organizations
+    const organizations = await pool.query(
+      'SELECT id FROM organizations WHERE is_active = true'
+    );
 
-    for (const invoice of invoices.rows) {
-      const message = `📋 Facture en retard: ${invoice.invoice_number}\nClient: ${invoice.contact_name}\nMontant: €${invoice.total}\nÉchéance: ${invoice.due_date}`;
-      
-      await sendEmail(invoice.email, `⚠️ Facture en retard: ${invoice.invoice_number}`, `<p>${message.replace(/\n/g, '<br>')}</p>`);
-      
-      await pool.query(`
-        INSERT INTO notifications (user_id, type, title, message, data)
-        VALUES ($1, 'overdue_invoice', 'Facture en retard', $2, $3)
-      `, [invoice.user_id, message, JSON.stringify({ invoice_id: invoice.id })]);
+    for (const org of organizations.rows) {
+      const invoices = await pool.query(`
+        SELECT i.*, c.first_name || ' ' || c.last_name as contact_name, u.email, u.id as user_id
+        FROM invoices i
+        JOIN contacts c ON i.contact_id = c.id
+        JOIN users u ON i.user_id = u.id
+        WHERE i.status = 'pending' AND i.due_date < $1 AND i.organization_id = $2
+      `, [today, org.id]);
+
+      for (const invoice of invoices.rows) {
+        const message = `📋 Facture en retard: ${invoice.invoice_number}\nClient: ${invoice.contact_name}\nMontant: €${invoice.total}\nÉchéance: ${invoice.due_date}`;
+        
+        await sendEmail(invoice.email, `⚠️ Facture en retard: ${invoice.invoice_number}`, `<p>${message.replace(/\n/g, '<br>')}</p>`);
+        
+        await pool.query(`
+          INSERT INTO notifications (user_id, type, title, message, data, organization_id)
+          VALUES ($1, 'overdue_invoice', 'Facture en retard', $2, $3, $4)
+        `, [invoice.user_id, message, JSON.stringify({ invoice_id: invoice.id }), org.id]);
+      }
     }
   } catch (error) {
     console.error('Overdue invoice check error:', error);

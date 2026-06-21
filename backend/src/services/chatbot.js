@@ -84,50 +84,50 @@ function getFeatureGuide(feature, lang) {
   return `**${g.title}**\n\n${g.steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}`;
 }
 
-async function getDatabaseAnswer(query, lang) {
+async function getDatabaseAnswer(query, lang, organizationId) {
   const lower = query.toLowerCase();
   const isFR = lang === 'fr';
 
   if (lower.match(/\b(count|nombre|combien).*(product|produit)/) || lower.match(/\b(product|produit).*(count|nombre|combien)/)) {
-    const result = await pool.query('SELECT COUNT(*) as count FROM products WHERE is_active = true');
+    const result = await pool.query('SELECT COUNT(*) as count FROM products WHERE is_active = true AND organization_id = $1', [organizationId]);
     return isFR ? `Il y a actuellement **${result.rows[0].count} produits** actifs.` : `There are currently **${result.rows[0].count} active products**.`;
   }
 
   if (lower.match(/\b(low.?stock|stock.?bas|stock.?alert)/)) {
-    const result = await pool.query('SELECT name, quantity, min_quantity FROM products WHERE is_active = true AND quantity <= min_quantity ORDER BY quantity ASC');
+    const result = await pool.query('SELECT name, quantity, min_quantity FROM products WHERE is_active = true AND quantity <= min_quantity AND organization_id = $1 ORDER BY quantity ASC', [organizationId]);
     if (result.rows.length === 0) return isFR ? 'Aucun produit en stock bas.' : 'No products low on stock.';
     const list = result.rows.map(p => `- ${p.name}: ${p.quantity} (min: ${p.min_quantity})`).join('\n');
     return isFR ? `**${result.rows.length} produits en stock bas:**\n\n${list}` : `**${result.rows.length} products low on stock:**\n\n${list}`;
   }
 
   if (lower.match(/\b(count|nombre|combien).*(contact|client)/) || lower.match(/\b(contact|client).*(count|nombre|combien)/)) {
-    const result = await pool.query('SELECT COUNT(*) as count FROM contacts WHERE is_active = true');
+    const result = await pool.query('SELECT COUNT(*) as count FROM contacts WHERE is_active = true AND organization_id = $1', [organizationId]);
     return isFR ? `**${result.rows[0].count} contacts** enregistrés.` : `**${result.rows[0].count} contacts** registered.`;
   }
 
   if (lower.match(/\b(count|nombre|combien).*(invoice|facture)/) || lower.match(/\b(invoice|facture).*(count|nombre|combien)/)) {
-    const result = await pool.query('SELECT COUNT(*) as count FROM invoices WHERE status != $1', ['draft']);
+    const result = await pool.query('SELECT COUNT(*) as count FROM invoices WHERE status != $1 AND organization_id = $2', ['draft', organizationId]);
     return isFR ? `**${result.rows[0].count} factures** (hors brouillons).` : `**${result.rows[0].count} invoices** (excluding drafts).`;
   }
 
   if (lower.match(/\b(pending|en attente|impayée).*(invoice|facture)/) || lower.match(/\b(invoice|facture).*(pending|en attente|impayée)/)) {
-    const result = await pool.query('SELECT COUNT(*) as count, COALESCE(SUM(total - paid_amount), 0) as total FROM invoices WHERE status = $1', ['pending']);
+    const result = await pool.query('SELECT COUNT(*) as count, COALESCE(SUM(total - paid_amount), 0) as total FROM invoices WHERE status = $1 AND organization_id = $2', ['pending', organizationId]);
     const { count, total } = result.rows[0];
     return isFR ? `**${count} factures en attente** pour **€${parseFloat(total).toLocaleString()}**.` : `**${count} pending invoices** totaling **€${parseFloat(total).toLocaleString()}**.`;
   }
 
   if (lower.match(/\b(count|nombre|combien).*(project|projet)/) || lower.match(/\b(project|projet).*(active|actif)/)) {
-    const result = await pool.query('SELECT COUNT(*) as count FROM projects WHERE status IN ($1, $2)', ['active', 'planning']);
+    const result = await pool.query('SELECT COUNT(*) as count FROM projects WHERE status IN ($1, $2) AND organization_id = $3', ['active', 'planning', organizationId]);
     return isFR ? `**${result.rows[0].count} projets actifs** ou en planification.` : `**${result.rows[0].count} active or planning projects**.`;
   }
 
   if (lower.match(/\b(count|nombre|combien).*(employee|employé|staff)/) || lower.match(/\b(employee|employé|staff).*(active|actif)/)) {
-    const result = await pool.query('SELECT COUNT(*) as count FROM employees WHERE status = $1', ['active']);
+    const result = await pool.query('SELECT COUNT(*) as count FROM employees WHERE status = $1 AND organization_id = $2', ['active', organizationId]);
     return isFR ? `**${result.rows[0].count} employés actifs**.` : `**${result.rows[0].count} active employees**.`;
   }
 
   if (lower.match(/\b(revenue|revenu|chiffre).*(facture|invoice|sale|vente)/) || lower.match(/\b(total|somme).*(payé|paid)/)) {
-    const result = await pool.query('SELECT COALESCE(SUM(total), 0) as total_revenue, COALESCE(SUM(paid_amount), 0) as total_paid FROM invoices WHERE type = $1', ['invoice']);
+    const result = await pool.query('SELECT COALESCE(SUM(total), 0) as total_revenue, COALESCE(SUM(paid_amount), 0) as total_paid FROM invoices WHERE type = $1 AND organization_id = $2', ['invoice', organizationId]);
     const { total_revenue, total_paid } = result.rows[0];
     const pending = parseFloat(total_revenue) - parseFloat(total_paid);
     return isFR
@@ -136,25 +136,25 @@ async function getDatabaseAnswer(query, lang) {
   }
 
   if (lower.match(/\b(show|afficher|lister|voir).*(product|produit)/)) {
-    const result = await pool.query('SELECT name, sku, quantity, price FROM products WHERE is_active = true ORDER BY name LIMIT 10');
+    const result = await pool.query('SELECT name, sku, quantity, price FROM products WHERE is_active = true AND organization_id = $1 ORDER BY name LIMIT 10', [organizationId]);
     if (result.rows.length === 0) return isFR ? 'Aucun produit trouvé.' : 'No products found.';
     return isFR ? `**Produits:**\n\n${result.rows.map(p => `- ${p.name} (${p.sku}) - Qty: ${p.quantity} - €${p.price}`).join('\n')}` : `**Products:**\n\n${result.rows.map(p => `- ${p.name} (${p.sku}) - Qty: ${p.quantity} - €${p.price}`).join('\n')}`;
   }
 
   if (lower.match(/\b(show|afficher|lister|voir).*(project|projet)/)) {
-    const result = await pool.query('SELECT name, status, priority, progress FROM projects WHERE status IN ($1, $2) ORDER BY name LIMIT 10', ['active', 'planning']);
+    const result = await pool.query('SELECT name, status, priority, progress FROM projects WHERE status IN ($1, $2) AND organization_id = $3 ORDER BY name LIMIT 10', ['active', 'planning', organizationId]);
     if (result.rows.length === 0) return isFR ? 'Aucun projet actif.' : 'No active projects.';
     return isFR ? `**Projets:**\n\n${result.rows.map(p => `- ${p.name} (${p.status}) - ${p.priority} - ${p.progress}%`).join('\n')}` : `**Projects:**\n\n${result.rows.map(p => `- ${p.name} (${p.status}) - ${p.priority} - ${p.progress}%`).join('\n')}`;
   }
 
   if (lower.match(/\b(show|afficher|lister|voir).*(invoice|facture)/)) {
-    const result = await pool.query(`SELECT i.invoice_number, i.total, i.status, c.first_name || ' ' || c.last_name as contact_name FROM invoices i LEFT JOIN contacts c ON i.contact_id = c.id WHERE i.status != $1 ORDER BY i.created_at DESC LIMIT 10`, ['draft']);
+    const result = await pool.query(`SELECT i.invoice_number, i.total, i.status, c.first_name || ' ' || c.last_name as contact_name FROM invoices i LEFT JOIN contacts c ON i.contact_id = c.id WHERE i.status != $1 AND i.organization_id = $2 ORDER BY i.created_at DESC LIMIT 10`, ['draft', organizationId]);
     if (result.rows.length === 0) return isFR ? 'Aucune facture.' : 'No invoices.';
     return isFR ? `**Factures:**\n\n${result.rows.map(i => `- ${i.invoice_number} - ${i.contact_name} - €${i.total} (${i.status})`).join('\n')}` : `**Invoices:**\n\n${result.rows.map(i => `- ${i.invoice_number} - ${i.contact_name} - €${i.total} (${i.status})`).join('\n')}`;
   }
 
   if (lower.match(/\b(show|afficher|lister|voir).*(employee|employé)/)) {
-    const result = await pool.query('SELECT employee_number, position, department FROM employees WHERE status = $1 LIMIT 10', ['active']);
+    const result = await pool.query('SELECT employee_number, position, department FROM employees WHERE status = $1 AND organization_id = $2 LIMIT 10', ['active', organizationId]);
     if (result.rows.length === 0) return isFR ? 'Aucun employé actif.' : 'No active employees.';
     return isFR ? `**Employés:**\n\n${result.rows.map(e => `- ${e.employee_number} - ${e.position || 'N/A'} - ${e.department || 'N/A'}`).join('\n')}` : `**Employees:**\n\n${result.rows.map(e => `- ${e.employee_number} - ${e.position || 'N/A'} - ${e.department || 'N/A'}`).join('\n')}`;
   }
@@ -184,7 +184,7 @@ const SYSTEM_PROMPT_FR = `Tu es l'assistant IA du logiciel ERP Alpha ERP dévelo
 
 const SYSTEM_PROMPT_EN = `You are the AI assistant for Alpha ERP software by Alpha Omega Digital. You help users use the software. You can answer about features (products, invoices, contacts, projects, employees), provide usage guides, and answer data questions. Be concise and helpful. Always respond in English.`;
 
-async function processMessage(userId, message) {
+async function processMessage(userId, message, organizationId) {
   const lang = detectLanguage(message);
   const lower = message.toLowerCase().trim();
 
@@ -210,7 +210,7 @@ async function processMessage(userId, message) {
     }
   }
 
-  const dbAnswer = await getDatabaseAnswer(lower, lang);
+  const dbAnswer = await getDatabaseAnswer(lower, lang, organizationId);
   if (dbAnswer) {
     const quickActions = [];
     if (lower.includes('product') || lower.includes('produit')) quickActions.push({ label: lang === 'fr' ? 'Produits' : 'Products', action: 'navigate', path: '/products' });
@@ -242,17 +242,17 @@ async function processMessage(userId, message) {
   return { text: fallback, suggestions: [], quickActions: [], language: lang };
 }
 
-async function getHistory(userId, limit = 50) {
-  const result = await pool.query('SELECT role, content, metadata, created_at FROM chat_messages WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2', [userId, limit]);
+async function getHistory(userId, organizationId, limit = 50) {
+  const result = await pool.query('SELECT role, content, metadata, created_at FROM chat_messages WHERE user_id = $1 AND organization_id = $2 ORDER BY created_at DESC LIMIT $3', [userId, organizationId, limit]);
   return result.rows.reverse();
 }
 
-async function saveMessage(userId, role, content, metadata = {}) {
-  await pool.query('INSERT INTO chat_messages (user_id, role, content, metadata) VALUES ($1, $2, $3, $4)', [userId, role, content, JSON.stringify(metadata)]);
+async function saveMessage(userId, role, content, organizationId, metadata = {}) {
+  await pool.query('INSERT INTO chat_messages (user_id, role, content, metadata, organization_id) VALUES ($1, $2, $3, $4, $5)', [userId, role, content, JSON.stringify(metadata), organizationId]);
 }
 
-async function clearHistory(userId) {
-  await pool.query('DELETE FROM chat_messages WHERE user_id = $1', [userId]);
+async function clearHistory(userId, organizationId) {
+  await pool.query('DELETE FROM chat_messages WHERE user_id = $1 AND organization_id = $2', [userId, organizationId]);
 }
 
 module.exports = { processMessage, getHistory, saveMessage, clearHistory, detectLanguage, AI_MODELS };

@@ -7,6 +7,7 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "migrate": "node src/config/migrate.js",
+    "migrate:tenant": "node src/config/migrate-tenant.js",
     "seed": "node src/config/seed.js",
     "test": "jest --coverage --forceExit",
     "test:watch": "jest --watch"
