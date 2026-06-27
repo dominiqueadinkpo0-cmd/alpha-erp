@@ -30,6 +30,7 @@ const redis = require('./config/redis');
 const auditLog = require('./middleware/audit');
 const auditRoutes = require('./routes/audit');
 const backupRoutes = require('./routes/backup');
+const healthRoutes = require('./routes/health');
 const { createBackup } = require('./services/backup');
 const { auth } = require('./middleware/auth');
 const { tenantIsolation } = require('./middleware/tenantIsolation');
@@ -46,6 +47,7 @@ app.use(sanitizeInput);
 app.use(requestLogger);
 
 // Auth routes (no tenant isolation needed)
+app.use('/api/health', healthRoutes);
 app.use('/api/auth', authLimiter, authRoutes);
 
 // Business routes with tenant isolation
